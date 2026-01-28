@@ -39,7 +39,7 @@ const playSound = (soundKey) => {
 // --- 1. ตัวแปรสถานะเกม ---
 export let score = 0;
 export let currentSkin = "default";
-export let currentBG = "classroom.jpg";
+export let currentBG = "classroom3.jpg";
 let isSleeping = false;
 let periodEnergy = 100;
 let hasFailedPeriod = false;
@@ -461,3 +461,4 @@ export function updatePointsUI() {
 }
 
 initGame();
+
