@@ -1,15 +1,12 @@
 import { db, userId, userName, userAvatar } from './firebase-config.js';
 import { doc, getDoc, setDoc, updateDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
-// นำเข้าโมดูลกราฟที่เราแยกไฟล์ไว้
 import { renderStatsModal } from './stats-module.js';
 
-// --- [Asset & Sound Settings - ปรับปรุงใหม่] ---
+// --- [Asset & Sound Settings] ---
 const sounds = {
-    // เสียงจากโฟลเดอร์ในโปรเจกต์ของคุณ
     tap: new Audio('sounds/tap.mp3'),
     confirm: new Audio('sounds/confirm.mp3'),
     denied: new Audio('sounds/denied.mp3'),
-    // เสียงสำรองจาก Google (คงไว้ตามโค้ดเดิม)
     click: new Audio('https://actions.google.com/sounds/v1/foley/button_click.ogg'),
     win: new Audio('https://actions.google.com/sounds/v1/cartoon/clime_up_the_ladder.ogg'),
     fail: new Audio('https://actions.google.com/sounds/v1/human_voices/fart.ogg'),
@@ -17,10 +14,9 @@ const sounds = {
     levelup: new Audio('https://actions.google.com/sounds/v1/cartoon/conga_drum_accent.ogg')
 };
 
-// ฟังก์ชันปลดล็อกเสียงสำหรับเบราว์เซอร์ (เพิ่มเข้ามา)
 const unlockAudio = () => {
     Object.values(sounds).forEach(s => {
-        s.play().then(() => { s.pause(); s.currentTime = 0; }).catch(() => {});
+        s.play().then(() => { s.pause(); s.currentTime = 0; }).catch(() => { });
     });
     document.removeEventListener('click', unlockAudio);
     console.log("🔊 Sound System Unlocked");
@@ -50,29 +46,33 @@ let hasFailedPeriod = false;
 
 // --- 2. ตัวแปรระบบช่วงเวลา ---
 let currentPeriod = 1;
-let totalPeriods = 6; 
+let totalPeriods = 6;
 let isBreakMode = false;
-let timeLeft = 1800; 
-let periodScores = []; 
+let timeLeft = 1800;
+let periodScores = [];
 let tabSwitchCount = 0;
-let totalFocusSeconds = 0; 
-let gameInterval = null; 
+let totalFocusSeconds = 0;
+let gameInterval = null;
 
-// ✨ [เพิ่มใหม่] ฟังก์ชันอัปเดตสถานะ Online/Away ไปยัง Firebase ✨
+// ตัวแปรพิเศษสำหรับแยก จอดับ VS สลับแอป
+let lastBlurTime = 0;
+let isActuallySwitched = false;
+
+// ✨ [อัปเดตสถานะไปยัง Firebase]
 async function updateOnlineStatus(status) {
     if (!userId) return;
     try {
         const userRef = doc(db, "students", userId);
         await updateDoc(userRef, {
             status: status,
-            lastSeen: Date.now() // บันทึกเวลาล่าสุดที่ระบบเห็นผู้ใช้
+            lastSeen: Date.now()
         });
     } catch (error) {
         console.error("Error updating status:", error);
     }
 }
 
-// --- [ฟังก์ชันเสริม: ระบบคำนวณพลังงานย้อนหลัง - ปรับให้ลดเบาลงเหลือ 0.8] ---
+// --- [ฟังก์ชันเสริม: ระบบคำนวณพลังงานย้อนหลัง] ---
 function handleBackgroundTime() {
     if (hasFailedPeriod || isBreakMode || !gameInterval) return;
 
@@ -82,12 +82,19 @@ function handleBackgroundTime() {
         const diffSeconds = Math.floor((currentTime - parseFloat(lastExit)) / 1000);
 
         if (diffSeconds > 0) {
+            // หักเวลาตามจริง
             timeLeft = Math.max(0, timeLeft - diffSeconds);
-            // ปรับจาก 1.5 เป็น 0.8 ตามที่ตกลงกัน (เบาลง)
-            const energyLost = diffSeconds * 0.8;
-            periodEnergy = Math.max(0, periodEnergy - energyLost);
 
-            console.log(`[Sync Success] หายไป ${diffSeconds} วินาที หักพลังงานแบบเบาลง ${energyLost.toFixed(1)} หน่วย`);
+            // 🚩 แยกแยะ: ถ้าสลับแอปจริง (isActuallySwitched) ถึงจะหักพลังงาน
+            if (isActuallySwitched) {
+                const energyLost = diffSeconds * 0.8;
+                periodEnergy = Math.max(0, periodEnergy - energyLost);
+                console.log(`[Switched App] หายไป ${diffSeconds} วินาที หักพลังงาน ${energyLost.toFixed(1)}`);
+            } else {
+                // ถ้าแค่จอดับ ให้คะแนนต่อเนื่อง (FocusSeconds เพิ่มตามเวลาที่หายไป)
+                totalFocusSeconds += diffSeconds;
+                console.log(`[Screen Locked] ออนไลน์ต่อเนื่อง ${diffSeconds} วินาที`);
+            }
 
             updateUI();
             updateImage();
@@ -97,13 +104,15 @@ function handleBackgroundTime() {
                 handleEnergyDepleted();
             }
         }
-        localStorage.removeItem("lastExitTime"); 
+        localStorage.removeItem("lastExitTime");
     }
+    // รีเซ็ตสถานะเมื่อกลับมา
+    isActuallySwitched = false;
 }
 
 // --- 3. ระบบจัดการเลเวล ---
 function getCurrentLevel() {
-    if (score >= 100) return 'grad'; 
+    if (score >= 100) return 'grad';
     if (score >= 50) return '3';
     if (score >= 20) return '2';
     return '1';
@@ -119,40 +128,29 @@ export function updateImage() {
     let fileName = "";
 
     if (hasFailedPeriod) {
-        fileName = `${userAvatar}_${lv}_fail.png`;
-    } 
+        fileName = (lv === '1') ? `${userAvatar}_fail1.png` : `${userAvatar}_${lv}_fail.png`;
+    }
     else if (isSleeping || periodEnergy <= 30) {
-        fileName = `${userAvatar}_${lv}_sleep.png`;
-    } 
+        fileName = `${userAvatar}_sleep${lv}.png`;
+    }
     else if (isBreakMode) {
-        fileName = (currentSkin !== "default" && currentSkin !== "") 
-            ? currentSkin.replace('.png', '') + "_idle.png" 
+        fileName = (currentSkin !== "default" && currentSkin !== "")
+            ? currentSkin.replace('.png', '') + "_idle.png"
             : `${userAvatar}_${lv}.png`;
-    } 
+    }
     else {
-        if (currentSkin !== "default" && currentSkin !== "") {
-            fileName = currentSkin; 
-        } else {
-            fileName = `${userAvatar}_lv.png`; 
-            fileName = `${userAvatar}_${lv}.png`; 
-        }
+        fileName = (currentSkin !== "default" && currentSkin !== "") ? currentSkin : `${userAvatar}_${lv}.png`;
     }
 
     if (!fileName.endsWith('.png')) fileName += ".png";
-
     const newSrc = `images/${fileName}`;
+    
     if (img.getAttribute('src') !== newSrc) {
         img.src = newSrc;
     }
 
     img.onerror = () => {
-        if (hasFailedPeriod) {
-            img.src = `images/${userAvatar}_fail1.png`;
-        } else if (isSleeping || periodEnergy <= 30) {
-            img.src = `images/${userAvatar}_sleep1.png`;
-        } else {
-            img.src = `images/${userAvatar}_1.png`; 
-        }
+        img.src = hasFailedPeriod ? `images/${userAvatar}_fail1.png` : (isSleeping ? `images/${userAvatar}_sleep1.png` : `images/${userAvatar}_1.png`);
     };
 }
 
@@ -165,35 +163,27 @@ export function updateBackground() {
     }
 }
 
-// --- 6. ระบบบันทึกข้อมูลไป Firebase (แก้ไขเพื่อป้องกันการเด้งกลับ) ---
+// --- 6. ระบบบันทึกข้อมูล ---
 async function saveUserData() {
     if (!userId) return;
     try {
         const timestamp = Date.now();
         const userRef = doc(db, "students", userId);
-        
-        // ใช้ updateDoc แทน setDoc เพื่อไม่ให้สร้างข้อมูลใหม่ถ้า ID นี้ถูกลบไปแล้ว
         await updateDoc(userRef, {
             name: userName,
             avatar: userAvatar,
             points: score,
             currentSkin: currentSkin,
             currentBG: currentBG,
-            status: isSleeping ? "away" : "online", // ✨ บันทึกสถานะควบคู่ไปด้วย
-            lastSeen: timestamp, // ✨ บันทึกเวลาที่อัปเดตล่าสุด
+            status: isSleeping ? (isActuallySwitched ? "สลับแอป" : "ออนไลน์ (ปิดจอ)") : "online",
+            lastSeen: timestamp,
             stats: {
                 focusSeconds: totalFocusSeconds,
                 switches: tabSwitchCount,
-                history: periodScores 
+                history: periodScores
             },
-            lastUpdate: timestamp 
-        }).catch(async (error) => {
-            // ถ้าเกิด Error เพราะหา Document ไม่เจอ (ถูก Admin ลบ) ให้หยุดส่งข้อมูล
-            if (error.code === 'not-found') {
-                console.warn("⚠️ บัญชีนี้ไม่มีอยู่ในระบบแล้ว (อาจถูกลบ)");
-            }
+            lastUpdate: timestamp
         });
-        
         localStorage.setItem("localLastUpdate", timestamp.toString());
     } catch (error) {
         console.error("Firebase Save Error:", error);
@@ -205,7 +195,7 @@ function showScreen(screenId) {
     document.getElementById('lobby-screen').style.setProperty('display', 'none', 'important');
     document.getElementById('setup-screen').style.setProperty('display', 'none', 'important');
     document.getElementById('main-game-area').style.display = 'none';
-    
+
     if (screenId === 'game') {
         document.getElementById('main-game-area').style.display = 'block';
     } else {
@@ -214,103 +204,69 @@ function showScreen(screenId) {
     }
 }
 
-window.showSetup = () => {
-    playSound('tap'); 
-    showScreen('setup-screen');
-};
-
-window.hideSetup = () => {
-    playSound('tap');
-    showScreen('lobby-screen');
-};
-
-window.logout = () => { 
-    if(confirm("ออกจากระบบใช่หรือไม่?")) window.location.href='index.html'; 
-};
+window.showSetup = () => { playSound('tap'); showScreen('setup-screen'); };
+window.hideSetup = () => { playSound('tap'); showScreen('lobby-screen'); };
+window.logout = () => { if (confirm("ออกจากระบบใช่หรือไม่?")) window.location.href = 'index.html'; };
 
 window.selectDuration = (totalMinutes) => {
-    playSound('confirm'); 
+    playSound('confirm');
     totalPeriods = totalMinutes / 30;
     currentPeriod = 1;
-    timeLeft = 1800; 
+    timeLeft = 1800;
     periodEnergy = 100;
     hasFailedPeriod = false;
-    
-    alert(`เริ่มคาบเรียน ${totalMinutes/60} ชั่วโมง (แบ่งเป็น ${totalPeriods} ช่วง ช่วงละ 30 นาที)`);
     showScreen('game');
     startGameLoop();
     updateUI();
 };
 
-// --- 8. ลูปเกมและการจัดการ UI (แก้ไขให้คะแนนอัปเดต Real-time ตามแอดมิน) ---
+// --- 8. ลูปเกมและการจัดการ UI ---
 export async function initGame() {
     if (!userId) { window.location.href = 'index.html'; return; }
-
-    // ✨ เมื่อเข้าเกม ให้ตั้งสถานะเป็น Online ทันที ✨
     updateOnlineStatus("online");
 
     onSnapshot(doc(db, "students", userId), (docSnap) => {
         if (!docSnap.exists()) {
-            console.error("🚫 ข้อมูลถูกลบโดยแอดมิน");
-            localStorage.clear(); 
-            alert("บัญชีของคุณถูกรีเซ็ตหรือถูกลบ กรุณาล็อกอินใหม่เพื่อเริ่มรอบใหม่");
-            window.location.href = 'index.html'; 
+            localStorage.clear();
+            window.location.href = 'index.html';
             return;
         }
-
         const data = docSnap.data();
-
-        // ✨ แก้ไขจุดนี้: ดึงคะแนนล่าสุดเสมอเพื่อให้ Real-time ตามหน้าแอดมิน ✨
-        score = data.points || 0; 
-        
+        score = data.points || 0;
         const serverTime = data.lastUpdate || 0;
         const localTime = parseInt(localStorage.getItem("localLastUpdate") || "0");
 
-        // ซิงค์ข้อมูลอื่นเฉพาะเมื่อมีการอัปเดตข้ามเครื่อง
         if (serverTime > localTime) {
             currentSkin = data.currentSkin || "default";
             currentBG = data.currentBG || "classroom.jpg";
             totalFocusSeconds = data.stats?.focusSeconds || 0;
             tabSwitchCount = data.stats?.switches || 0;
             periodScores = data.stats?.history || [];
-            
             localStorage.setItem("localLastUpdate", serverTime.toString());
-            console.log("🔄 ข้อมูลซิงค์เรียบร้อย!");
         }
-
-        // อัปเดต UI ทันที
-        const lobbyNameEl = document.getElementById('lobby-name');
-        const userDisplayEl = document.getElementById('user-display');
-
-        if (lobbyNameEl) lobbyNameEl.innerText = data.name || userName;
-        if (userDisplayEl) userDisplayEl.innerText = data.name || userName;
-
-        // เรียกฟังก์ชันรวมศูนย์เพื่ออัปเดตคะแนนทุกหน้าจอ
         updatePointsUI();
         updateImage();
         updateBackground();
     });
 
     showScreen('lobby-screen');
-    requestAnimationFrame(checkFocus);
 }
 
 function startGameLoop() {
     if (gameInterval) clearInterval(gameInterval);
     gameInterval = setInterval(async () => {
         if (hasFailedPeriod) return;
-
         if (timeLeft > 0) {
             timeLeft--;
             if (!isBreakMode) {
-                if (isSleeping) {
-                    periodEnergy -= 1.5;
+                if (isSleeping && isActuallySwitched) {
+                    periodEnergy -= 1.5; 
                     if (periodEnergy <= 0) {
                         periodEnergy = 0;
                         await handleEnergyDepleted();
                     }
                 } else {
-                    totalFocusSeconds++; 
+                    totalFocusSeconds++;
                     if (periodEnergy < 100) periodEnergy += 0.3;
                 }
             }
@@ -321,55 +277,45 @@ function startGameLoop() {
     }, 1000);
 }
 
-// ✨ ปรับปรุงระบบตรวจจับการสลับหน้าจอ (Visibility API) ✨
+// ✨ [ส่วนแก้ไขสำคัญ: แยกจอดับ VS สลับแอป]
+window.addEventListener('blur', () => {
+    lastBlurTime = Date.now();
+});
+
 document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
         isSleeping = true;
         localStorage.setItem("lastExitTime", Date.now().toString());
-        tabSwitchCount++;
+        
+        // ถ้า Hidden ห่างจาก Blur น้อยมาก (เช่น < 100ms) มักจะเป็นการปัดแอป
+        // แต่ถ้าปิดหน้าจอ บางรุ่นจะไม่กระตุ้น Visibility ทันที หรือมี Delay ต่างกัน
+        const timeSinceBlur = Date.now() - lastBlurTime;
+        
+        if (timeSinceBlur < 250) { 
+            isActuallySwitched = true; 
+            tabSwitchCount++;
+            updateOnlineStatus("สลับแอป");
+        } else {
+            isActuallySwitched = false;
+            updateOnlineStatus("ออนไลน์ (ปิดจอ)");
+        }
         updateImage();
-        updateOnlineStatus("away"); // ✨ ส่งสถานะออกจากหน้าจอไปยังแอดมิน
     } else {
         isSleeping = false;
-        handleBackgroundTime(); 
+        handleBackgroundTime();
         updateImage();
-        updateOnlineStatus("online"); // ✨ ส่งสถานะในหน้าจอกลับไปยังแอดมิน
+        updateOnlineStatus("online");
     }
 });
 
-// ✨ ปรับปรุงระบบตรวจจับการ Focus หน้าต่าง (Window Focus/Blur) ✨
-function checkFocus() {
-    const hidden = document.hidden || !document.hasFocus();
-    
-    if (hidden !== isSleeping) {
-        isSleeping = hidden;
-        
-        if (isSleeping) {
-            localStorage.setItem("lastExitTime", Date.now().toString());
-            tabSwitchCount++; 
-            updateOnlineStatus("away"); // ✨ ส่งสถานะ "ออกจากหน้าจอ"
-        } else {
-            handleBackgroundTime();
-            updateOnlineStatus("online"); // ✨ ส่งสถานะ "ในหน้าจอ"
-        }
-        updateImage();
-    }
-    requestAnimationFrame(checkFocus);
-}
-
 async function handleEnergyDepleted() {
     if (!hasFailedPeriod && !isBreakMode) {
-        playSound('denied'); 
+        playSound('denied');
         hasFailedPeriod = true;
         const msg = document.getElementById('status-msg');
-        if (msg) {
-            msg.innerText = "หลุดโฟกัสจนพลังหมด! ⚡";
-            msg.style.color = "#f44336";
-        }
-        
+        if (msg) { msg.innerText = "หลุดโฟกัสจนพลังหมด! ⚡"; msg.style.color = "#f44336"; }
         const resetBtn = document.getElementById('reset-btn');
         if (resetBtn) resetBtn.style.display = "block";
-        
         if (score >= 5) score -= 5; else score = 0;
         await saveUserData();
         updatePointsUI();
@@ -380,17 +326,15 @@ async function handleEnergyDepleted() {
 async function handlePeriodEnd() {
     if (!isBreakMode) {
         periodScores.push(Math.floor(periodEnergy));
-        
         if (periodEnergy > 50) {
-            playSound('confirm'); 
+            playSound('confirm');
             score += 10;
             await saveUserData();
             updatePointsUI();
         }
-
         if (currentPeriod < totalPeriods) {
             isBreakMode = true;
-            timeLeft = 300; 
+            timeLeft = 300;
             playSound('break');
             alert(`🌟 จบช่วงที่ ${currentPeriod} แล้ว! พักผ่อนได้ 5 นาที`);
         } else {
@@ -407,28 +351,19 @@ async function handlePeriodEnd() {
         playSound('tap');
         alert(`🔔 เริ่มช่วงที่ ${currentPeriod}! กลับมาโฟกัสกันเถอะ`);
     }
-    updateImage();
-    updateBackground();
-    updateUI();
+    updateImage(); updateBackground(); updateUI();
 }
 
 window.restartSession = function () {
     playSound('tap');
     hasFailedPeriod = false;
     periodEnergy = 100;
-    timeLeft = 1800; 
-    
+    timeLeft = 1800;
     const msg = document.getElementById('status-msg');
-    if (msg) {
-        msg.innerText = "กำลังใช้สมาธิ... ✨";
-        msg.style.color = "#4db6ac";
-    }
-    
+    if (msg) { msg.innerText = "กำลังใช้สมาธิ... ✨"; msg.style.color = "#4db6ac"; }
     const resetBtn = document.getElementById('reset-btn');
     if (resetBtn) resetBtn.style.display = "none";
-    
-    updateImage();
-    updateUI();
+    updateImage(); updateUI();
 };
 
 function updateUI() {
@@ -438,36 +373,15 @@ function updateUI() {
     if (timerEl) timerEl.innerText = `${m}:${s < 10 ? '0' : ''}${s}`;
 
     const energyFill = document.getElementById('energy-fill');
-    const mainGameArea = document.getElementById('main-game-area');
-
     if (energyFill) {
         energyFill.style.width = `${periodEnergy}%`;
         energyFill.style.background = isBreakMode ? "#4fc3f7" : "linear-gradient(90deg, #4db6ac, #81c784)";
-    }
-
-    if (isBreakMode) {
-        mainGameArea.style.backgroundColor = "rgba(79, 195, 247, 0.15)";
-    } else {
-        mainGameArea.style.backgroundColor = "transparent";
-    }
-
-    const statusMsg = document.getElementById('status-msg');
-    if (statusMsg && !hasFailedPeriod) {
-        statusMsg.innerText = isBreakMode
-            ? `☕ ช่วงพักผ่อน (${currentPeriod}/${totalPeriods})`
-            : `📚 ช่วงโฟกัส (${currentPeriod}/${totalPeriods})`;
     }
 }
 
 window.showStatistics = () => {
     playSound('tap');
-    renderStatsModal(
-        periodScores, 
-        totalFocusSeconds, 
-        tabSwitchCount, 
-        userName, 
-        getCurrentLevel()
-    );
+    renderStatsModal(periodScores, totalFocusSeconds, tabSwitchCount, userName, getCurrentLevel());
 };
 
 function showFinalSummary() {
@@ -475,26 +389,16 @@ function showFinalSummary() {
     alert(`🏁 จบการเรียนวันนี้!\n- โฟกัสเฉลี่ย: ${avgFocus.toFixed(2)}%\n- สลับหน้าจอรวม: ${tabSwitchCount} ครั้ง\n- แต้มปัจจุบัน: ${score} 💎`);
 }
 
-window.openShop = () => { 
-    playSound('tap');
-    updatePointsUI(); 
-    document.getElementById('shop-modal').style.display = 'flex'; 
-    switchShopTab('skins'); 
-};
-
-window.closeShop = () => { 
-    playSound('tap');
-    document.getElementById('shop-modal').style.display = 'none'; 
-};
+window.openShop = () => { playSound('tap'); updatePointsUI(); document.getElementById('shop-modal').style.display = 'flex'; switchShopTab('skins'); };
+window.closeShop = () => { playSound('tap'); document.getElementById('shop-modal').style.display = 'none'; };
 
 window.switchShopTab = (tab) => {
     document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
     const itemsList = document.querySelector('.items-list');
     if (itemsList) itemsList.innerHTML = "";
-    
     let lv = getCurrentLevel();
     let shopLv = (lv === 'grad') ? '3' : lv;
-    
+
     if (tab === 'skins') {
         itemsList.innerHTML = `
             <div class="item-card" onclick="selectItem('ชุดเริ่มต้น', 0, 'images/${userAvatar}_${lv}.png', 'skin')"><span>🎓 ชุดพื้นฐาน (Lv.${lv})</span><span class="price free">ฟรี</span></div>
@@ -505,7 +409,8 @@ window.switchShopTab = (tab) => {
         itemsList.innerHTML = `
             <div class="item-card" onclick="selectItem('ห้องเรียนหลัก', 0, 'images/classroom.jpg', 'bg')"><span>🏫 ห้องเรียนหลัก</span><span class="price free">ฟรี</span></div>
             <div class="item-card" onclick="selectItem('ห้องเรียนสีเขียว', 20, 'images/classroom1.jpg', 'bg')"><span>📘 ห้องเรียนสีเขียว</span><span class="price">20 💎</span></div>
-            <div class="item-card" onclick="selectItem('ห้องเรียนยามเย็น', 40, 'images/classroom3.jpg', 'bg')"><span>🌇 ห้องเรียนยามเย็น</span><span class="price">40 💎</span></div>`;
+            <div class="item-card" onclick="selectItem('ห้องเรียนยามเย็น', 40, 'images/classroom3.jpg', 'bg')"><span>🌇 ห้องเรียนยามเย็น</span><span class="price">40 💎</span></div>
+            <div class="item-card" onclick="selectItem('ห้องเรียนสีฟ้าสดใส', 60, 'images/classroom2.jpg', 'bg')"><span>🩵 ห้องเรียนสีฟ้าสดใส</span><span class="price">60 💎</span></div>`;
     }
 };
 
@@ -527,12 +432,8 @@ window.selectItem = (name, price, imgSrc, type) => {
             updatePointsUI();
             if (type === 'skin') updateImage(); else updateBackground();
             playSound('confirm');
-            alert("อัปเดตเรียบร้อย!");
             window.closeShop();
-        } else { 
-            playSound('denied');
-            alert("แต้มไม่พอ!"); 
-        }
+        } else { playSound('denied'); alert("แต้มไม่พอ!"); }
     };
 };
 
@@ -545,33 +446,16 @@ window.processRedeem = async (cost) => {
             await saveUserData();
             updatePointsUI(); 
             playSound('confirm');
-            alert(`แลกรางวัลสำเร็จ! หักไป ${cost} แต้ม (คงเหลือ ${score} แต้ม)`);
-        } catch (error) {
-            console.error("Redeem Error:", error);
-            alert("เกิดข้อผิดพลาดในการเชื่อมต่อฐานข้อมูล");
-        }
-    } else {
-        playSound('denied');
-        alert("แต้มของคุณไม่เพียงพอสำหรับการแลกรางวัลนี้");
-    }
+            alert(`แลกรางวัลสำเร็จ! หักไป ${cost} แต้ม`);
+        } catch (error) { alert("เกิดข้อผิดพลาดในการเชื่อมต่อฐานข้อมูล"); }
+    } else { playSound('denied'); alert("แต้มของคุณไม่เพียงพอ"); }
 }
 
 export function updatePointsUI() {
-    const ptsEl = document.getElementById('pts');
-    const lobbyPtsEl = document.getElementById('lobby-pts'); // เพิ่มการอัปเดตคะแนนหน้า Lobby
-    const shopPtsEl = document.getElementById('shop-pts-balance');
-    const currentPointsModal = document.getElementById('current-points');
-    const pointsDisplayHUD = document.getElementById('points-display');
-    
-    if (ptsEl) ptsEl.innerText = score;
-    if (lobbyPtsEl) lobbyPtsEl.innerText = score; // ทำให้คะแนนหน้าแรกเปลี่ยนทันที
-    if (shopPtsEl) shopPtsEl.innerText = score;
-    if (currentPointsModal) currentPointsModal.innerText = score;
-    if (pointsDisplayHUD) pointsDisplayHUD.innerText = score;
-
+    const ids = ['pts', 'lobby-pts', 'shop-pts-balance', 'current-points', 'points-display'];
+    ids.forEach(id => { const el = document.getElementById(id); if (el) el.innerText = score; });
     const btn50 = document.querySelector('.btn-redeem-small');
     const btn100 = document.querySelector('.btn-redeem-large');
-    
     if(btn50) btn50.disabled = (score < 50);
     if(btn100) btn100.disabled = (score < 100);
 }
