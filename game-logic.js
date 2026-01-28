@@ -72,7 +72,7 @@ async function updateOnlineStatus(status) {
     }
 }
 
-// --- [ฟังก์ชันเสริม: ระบบคำนวณพลังงานย้อนหลัง] ---
+// --- [แก้ไขแล้ว] ระบบคำนวณพลังงานย้อนหลังเมื่อกลับมาที่หน้าจอ ---
 function handleBackgroundTime() {
     if (hasFailedPeriod || isBreakMode || !gameInterval) return;
 
@@ -85,15 +85,16 @@ function handleBackgroundTime() {
             // หักเวลาตามจริง
             timeLeft = Math.max(0, timeLeft - diffSeconds);
 
-            // 🚩 แยกแยะ: ถ้าสลับแอปจริง (isActuallySwitched) ถึงจะหักพลังงาน
             if (isActuallySwitched) {
+                // 🚩 กรณีสลับแอปจริง: หักพลังงาน
                 const energyLost = diffSeconds * 0.8;
                 periodEnergy = Math.max(0, periodEnergy - energyLost);
                 console.log(`[Switched App] หายไป ${diffSeconds} วินาที หักพลังงาน ${energyLost.toFixed(1)}`);
             } else {
-                // ถ้าแค่จอดับ ให้คะแนนต่อเนื่อง (FocusSeconds เพิ่มตามเวลาที่หายไป)
+                // ✅ กรณีแค่จอดับ: ให้คะแนนย้อนหลัง และไม่หักพลังงาน
                 totalFocusSeconds += diffSeconds;
-                console.log(`[Screen Locked] ออนไลน์ต่อเนื่อง ${diffSeconds} วินาที`);
+                periodEnergy = Math.min(100, periodEnergy + (diffSeconds * 0.1)); 
+                console.log(`[Screen Locked] ออนไลน์ย้อนหลัง ${diffSeconds} วินาที (ไม่หักพลังงาน)`);
             }
 
             updateUI();
@@ -252,6 +253,7 @@ export async function initGame() {
     showScreen('lobby-screen');
 }
 
+// --- [แก้ไขแล้ว] ลูปเกมหลัก: เช็คสถานะการสลับแอปอย่างละเอียด ---
 function startGameLoop() {
     if (gameInterval) clearInterval(gameInterval);
     gameInterval = setInterval(async () => {
@@ -259,13 +261,16 @@ function startGameLoop() {
         if (timeLeft > 0) {
             timeLeft--;
             if (!isBreakMode) {
+                // ถ้า "ปิด/ซ่อนหน้าจอ" และ "เป็นการสลับแอป" จริงๆ
                 if (isSleeping && isActuallySwitched) {
                     periodEnergy -= 1.5; 
                     if (periodEnergy <= 0) {
                         periodEnergy = 0;
                         await handleEnergyDepleted();
                     }
-                } else {
+                } 
+                // ถ้าหน้าจอปกติ หรือ ปิดจอแบบค้างเว็บไว้ (isActuallySwitched เป็น false)
+                else {
                     totalFocusSeconds++;
                     if (periodEnergy < 100) periodEnergy += 0.3;
                 }
@@ -287,11 +292,10 @@ document.addEventListener('visibilitychange', () => {
         isSleeping = true;
         localStorage.setItem("lastExitTime", Date.now().toString());
         
-        // ถ้า Hidden ห่างจาก Blur น้อยมาก (เช่น < 100ms) มักจะเป็นการปัดแอป
-        // แต่ถ้าปิดหน้าจอ บางรุ่นจะไม่กระตุ้น Visibility ทันที หรือมี Delay ต่างกัน
         const timeSinceBlur = Date.now() - lastBlurTime;
         
-        if (timeSinceBlur < 250) { 
+        // เพิ่มเวลาเป็น 500ms เพื่อความแม่นยำในการแยก "จอดับ" ออกจาก "สลับแอป"
+        if (timeSinceBlur < 500) { 
             isActuallySwitched = true; 
             tabSwitchCount++;
             updateOnlineStatus("สลับแอป");
