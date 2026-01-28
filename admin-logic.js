@@ -55,7 +55,7 @@ function loadStudents() {
             const points = data.points || 0;
             const avatar = data.avatar || "girl"; 
             
-            // --- [Logic ใหม่] ระบบคำนวณสถานะ 4 ระดับ ---
+            // --- [Logic แก้ไขใหม่] ระบบแสดงสถานะให้ตรงกับฝั่งนิสิต ---
             const lastSeen = data.lastSeen || 0;
             const currentTime = Date.now();
             const isOffline = (currentTime - lastSeen) > 60000; // หายไปเกิน 60 วินาที
@@ -64,15 +64,15 @@ function loadStudents() {
             if (isOffline) {
                 statusHTML = `<div class="status-pill status-offline"><span>ออฟไลน์</span></div>`;
             } else {
-                // อ้างอิงคำจากไฟล์นิสิตล่าสุด (ออนไลน์, สลับแอป, ออนไลน์ (ปิดจอ))
+                // เช็คคำสั่งสถานะที่ถูกส่งมาจากฝั่งตัวเกม
                 if (data.status === 'online' || data.status === 'ออนไลน์') {
                     statusHTML = `<div class="status-pill status-online"><span>ในหน้าจอ</span></div>`;
                 } else if (data.status === 'ออนไลน์ (ปิดจอ)') {
-                    statusHTML = `<div class="status-pill status-lock"><span>ล็อคหน้าจอ</span></div>`;
+                    statusHTML = `<div class="status-pill status-lock"><span>ปิดหน้าจอ</span></div>`;
                 } else if (data.status === 'สลับแอป') {
                     statusHTML = `<div class="status-pill status-away"><span>สลับแอป 🚫</span></div>`;
                 } else {
-                    statusHTML = `<div class="status-pill status-away"><span>ออกจากหน้าจอ</span></div>`;
+                    statusHTML = `<div class="status-pill status-away"><span>ออกจากแอป</span></div>`;
                 }
             }
 
@@ -106,7 +106,7 @@ function loadStudents() {
     });
 }
 
-// --- ฟังก์ชันลบผู้ใช้ (ครบถ้วนเหมือนเดิม) ---
+// --- ฟังก์ชันลบผู้ใช้ ---
 window.deleteStudent = async (id, name) => {
     if (!id || id === "undefined" || id.trim() === "") return;
     if (confirm(`⚠️ ยืนยันการลบคุณ "${name}"?\nข้อมูลจะหายไปถาวรและไม่สามารถกู้คืนได้`)) {
